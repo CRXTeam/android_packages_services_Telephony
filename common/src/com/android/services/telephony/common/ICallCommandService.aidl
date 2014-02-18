@@ -153,4 +153,9 @@ interface ICallCommandService {
      * Update connection mute state accordingly.
      */
     void updateMuteState(int subscriptionId, boolean muted);
+
+    /**
+     * Add the call's number to the Blacklist and hangs up the call.
+     */
+    void blacklistAndHangup(int callId);
 }

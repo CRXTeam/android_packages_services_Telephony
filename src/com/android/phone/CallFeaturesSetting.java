@@ -69,6 +69,7 @@ import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.cdma.TtyIntent;
+import com.android.internal.telephony.util.BlacklistUtils;
 import com.android.phone.sip.SipSharedPreferences;
 
 import java.util.Arrays;
@@ -299,6 +300,9 @@ public class CallFeaturesSetting extends PreferenceActivity
     private static final String VOICEMAIL_VIBRATION_NEVER = "never";
     private PreferenceScreen mIPPrefix;
 
+    // Blacklist support
+    private static final String BUTTON_BLACKLIST = "button_blacklist";
+
     private EditPhoneNumberPreference mSubMenuVoicemailSettings;
 
     private Runnable mRingtoneLookupRunnable;
@@ -344,6 +348,7 @@ public class CallFeaturesSetting extends PreferenceActivity
     private ListPreference mChooseReverseLookupProvider;
     private ListPreference mT9SearchInputLocale;
     private CheckBoxPreference mButtonProximity;
+    private PreferenceScreen mButtonBlacklist;
 
     private class VoiceMailProvider {
         public VoiceMailProvider(String name, Intent intent) {
@@ -1737,6 +1742,9 @@ public class CallFeaturesSetting extends PreferenceActivity
         createSipCallSettings();
         createImsSettings();
 
+        // Blacklist screen - Needed for setting summary
+        mButtonBlacklist = (PreferenceScreen) prefSet.findPreference(BUTTON_BLACKLIST);
+
         ActionBar actionBar = getActionBar();
         if (actionBar != null) {
             // android.R.id.home will be triggered in onOptionsItemSelected()
@@ -1912,6 +1920,16 @@ public class CallFeaturesSetting extends PreferenceActivity
                 pref.setEnabled(false);
             } else if (pref instanceof PreferenceGroup) {
                 disablePreferencesForAirplaneMode((PreferenceGroup) pref);
+            }
+        }
+	}
+
+    private void updateBlacklistSummary() {
+        if (mButtonBlacklist != null) {
+            if (BlacklistUtils.isBlacklistEnabled(this)) {
+                mButtonBlacklist.setSummary(R.string.blacklist_summary);
+            } else {
+                mButtonBlacklist.setSummary(R.string.blacklist_summary_disabled);
             }
         }
     }
