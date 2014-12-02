@@ -31,6 +31,7 @@ import android.telephony.ServiceState;
 import android.telephony.TelephonyManager;
 
 import com.android.internal.telephony.Phone;
+import com.android.internal.telephony.ServiceStateTracker;
 import com.android.internal.telephony.TelephonyCapabilities;
 
 import android.util.Log;
@@ -47,18 +48,23 @@ public class OtaStartupReceiver extends BroadcastReceiver {
     private static final int SERVICE_STATE_CHANGED = 11;
     private Context mContext;
 
-    /**
-     * For debug purposes we're listening for otaspChanged events as
-     * this may be be used in the future for deciding if OTASP is
-     * necessary.
-     */
     private int mOtaspMode = -1;
     private boolean mPhoneStateListenerRegistered = false;
     private PhoneStateListener mPhoneStateListener = new PhoneStateListener() {
         @Override
         public void onOtaspChanged(int otaspMode) {
+            if (mOtaspMode == otaspMode) {
+                return;
+            }
             mOtaspMode = otaspMode;
             Log.v(TAG, "onOtaspChanged: mOtaspMode=" + mOtaspMode);
+
+            if (otaspMode == ServiceStateTracker.OTASP_NEEDED) {
+                Log.i(TAG, "OTASP is needed - performing CDMA provisioning");
+                final Intent intent = new Intent(OtaUtils.ACTION_PERFORM_CDMA_PROVISIONING);
+                intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                mContext.startActivity(intent);
+            }
         }
     };
 
@@ -105,17 +111,9 @@ public class OtaStartupReceiver extends BroadcastReceiver {
                     "  mOtaspMode=" + mOtaspMode);
         }
 
-        Settings.System.putInt(context.getContentResolver(),
-                Settings.System.AOSP_DIALER, 1);
-
         PhoneGlobals globals = PhoneGlobals.getInstanceIfPrimary();
         if (globals == null) {
             if (DBG) Log.d(TAG, "Not primary user, nothing to do.");
-            return;
-        }
-
-        if (!TelephonyCapabilities.supportsOtasp(PhoneGlobals.getPhone())) {
-            if (DBG) Log.d(TAG, "OTASP not supported, nothing to do.");
             return;
         }
 
@@ -127,6 +125,11 @@ public class OtaStartupReceiver extends BroadcastReceiver {
             mPhoneStateListenerRegistered = true;
         } else {
             if (DBG) Log.d(TAG, "PhoneStateListener already registered");
+        }
+
+        if (!TelephonyCapabilities.supportsOtasp(PhoneGlobals.getPhone())) {
+            if (DBG) Log.d(TAG, "OTASP not supported, nothing to do.");
+            return;
         }
 
         if (shouldPostpone(context)) {
