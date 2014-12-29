@@ -25,15 +25,21 @@ import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.TelephonyCapabilities;
+import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.telephony.cdma.CdmaInformationRecords.CdmaDisplayInfoRec;
 import com.android.internal.telephony.cdma.CdmaInformationRecords.CdmaSignalInfoRec;
 import com.android.internal.telephony.cdma.SignalToneUtil;
+import com.android.internal.telephony.gsm.SuppServiceNotification;
 
 import android.app.ActivityManagerNative;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothHeadset;
 import android.bluetooth.BluetoothProfile;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.database.Cursor;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
@@ -53,6 +59,7 @@ import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.EventLog;
 import android.util.Log;
+import android.widget.Toast;
 
 /**
  * Phone app module that listens for phone state changes and various other
@@ -91,7 +98,7 @@ public class CallNotifier extends Handler {
     private static final int PHONE_MWI_CHANGED = 21;
     private static final int DISPLAYINFO_NOTIFICATION_DONE = 24;
     private static final int UPDATE_IN_CALL_NOTIFICATION = 27;
-
+    private static final int ACTION_SUBINFO_RECORD_UPDATED = 28;
 
     private PhoneGlobals mApplication;
     private CallManager mCM;
@@ -112,6 +119,8 @@ public class CallNotifier extends Handler {
     private AudioManager mAudioManager;
 
     private final BluetoothManager mBluetoothManager;
+
+    private PhoneStateListener[] mPhoneStateListener;
 
     /**
      * Initialize the singleton CallNotifier instance.
@@ -150,8 +159,31 @@ public class CallNotifier extends Handler {
                                     BluetoothProfile.HEADSET);
         }
 
+        int phoneCount = TelephonyManager.getDefault().getPhoneCount();
+        mPhoneStateListener = new PhoneStateListener[phoneCount];
         listen();
+        IntentFilter filter = new IntentFilter(TelephonyIntents.ACTION_SUBINFO_RECORD_UPDATED);
+        mApplication.getApplicationContext().registerReceiver(mBroadcastReceiver, filter);
     }
+
+    private void unRegisterPhoneStateListener() {
+        for (int i = 0 ; i < TelephonyManager.getDefault().getPhoneCount(); i++) {
+            if (mPhoneStateListener[i] != null) {
+                TelephonyManager.getDefault().listen(mPhoneStateListener[i],
+                        PhoneStateListener.LISTEN_NONE);
+            }
+        }
+    }
+
+    private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
+        public void onReceive(Context context, Intent intent) {
+            final String action = intent.getAction();
+            if (action.equals(TelephonyIntents.ACTION_SUBINFO_RECORD_UPDATED)) {
+                log("onReceive... ");
+                sendEmptyMessage(ACTION_SUBINFO_RECORD_UPDATED);
+            }
+        }
+    };
 
     private void listen() {
         TelephonyManager telephonyManager = (TelephonyManager)mApplication.getSystemService(
@@ -247,6 +279,16 @@ public class CallNotifier extends Handler {
                 }
                 break;
 
+            case CallStateMonitor.PHONE_SUPP_SERVICE_NOTIFY:
+                if (DBG) log("Received Supplementary Notification");
+                onSuppServiceNotification((AsyncResult) msg.obj);
+                break;
+
+            case ACTION_SUBINFO_RECORD_UPDATED:
+                if (DBG) log("ACTION_SUBINFO_RECORD_UPDATED...");
+                unRegisterPhoneStateListener();
+                listen();
+
             default:
                 // super.handleMessage(msg);
         }
@@ -255,7 +297,7 @@ public class CallNotifier extends Handler {
     private PhoneStateListener getPhoneStateListener(int phoneId) {
         long[] subId = SubscriptionManager.getSubId(phoneId);
 
-        PhoneStateListener phoneStateListener = new PhoneStateListener(subId[0]) {
+        mPhoneStateListener[phoneId]  = new PhoneStateListener(subId[0]) {
             @Override
             public void onMessageWaitingIndicatorChanged(boolean mwi) {
                 Phone phone = PhoneUtils.getPhoneFromSubId(mSubId);
@@ -268,7 +310,7 @@ public class CallNotifier extends Handler {
                 onCfiChanged(cfi, phone);
             }
         };
-        return phoneStateListener;
+        return mPhoneStateListener[phoneId];
     }
 
     /**
@@ -605,6 +647,86 @@ public class CallNotifier extends Handler {
                 }
             }
         }
+    }
+
+    private void onSuppServiceNotification(AsyncResult r) {
+        SuppServiceNotification notification = (SuppServiceNotification) r.result;
+
+        /* show a toast for transient notifications */
+        int toastResId = getSuppServiceToastTextResIdIfEnabled(notification);
+        if (toastResId >= 0) {
+            Toast.makeText(mApplication, mApplication.getString(toastResId),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    protected int getSuppServiceToastTextResIdIfEnabled(SuppServiceNotification notification) {
+        if (!PhoneSettings.showInCallEvents(mApplication)) {
+            /* don't show anything if the user doesn't want it */
+            return -1;
+        }
+        return getSuppServiceToastTextResId(notification);
+    }
+
+    protected int getSuppServiceToastTextResId(SuppServiceNotification notification) {
+        if (notification.notificationType == SuppServiceNotification.NOTIFICATION_TYPE_MO) {
+            switch (notification.code) {
+                case SuppServiceNotification.MO_CODE_UNCONDITIONAL_CF_ACTIVE :
+                    // This message is displayed when an outgoing call is made
+                    // and unconditional forwarding is enabled.
+                    return R.string.call_notif_unconditionalCF;
+                case SuppServiceNotification.MO_CODE_SOME_CF_ACTIVE:
+                    // This message is displayed when an outgoing call is made
+                    // and conditional forwarding is enabled.
+                    return R.string.call_notif_conditionalCF;
+                case SuppServiceNotification.MO_CODE_CALL_FORWARDED:
+                    //This message is displayed on A when the outgoing call actually gets forwarded to C
+                    return R.string.call_notif_MOcall_forwarding;
+                case SuppServiceNotification.MO_CODE_CUG_CALL:
+                    //This message is displayed on A, when A makes call to B, both A & B
+                    //belong to a CUG group
+                    return R.string.call_notif_cugcall;
+                case SuppServiceNotification.MO_CODE_OUTGOING_CALLS_BARRED:
+                    //This message is displayed on A when outging is barred on A
+                    return R.string.call_notif_outgoing_barred;
+                case SuppServiceNotification.MO_CODE_INCOMING_CALLS_BARRED:
+                    //This message is displayed on A, when A is calling B & incoming is barred on B
+                    return R.string.call_notif_incoming_barred;
+                case SuppServiceNotification.MO_CODE_CLIR_SUPPRESSION_REJECTED:
+                    //This message is displayed on A, when CLIR suppression is rejected
+                    return R.string.call_notif_clir_suppression_rejected;
+                case SuppServiceNotification.MO_CODE_CALL_DEFLECTED:
+                    //This message is displayed on A, when the outgoing call gets deflected to C from B
+                    return R.string.call_notif_call_deflected;
+            }
+        } else if (notification.notificationType == SuppServiceNotification.NOTIFICATION_TYPE_MT) {
+            switch (notification.code) {
+                case SuppServiceNotification.MT_CODE_CUG_CALL:
+                    //This message is displayed on B, when A makes call to B, both A & B
+                    //belong to a CUG group
+                    return R.string.call_notif_cugcall;
+               case SuppServiceNotification.MT_CODE_MULTI_PARTY_CALL:
+                   //This message is displayed on B when the the call is changed as multiparty
+                   return R.string.call_notif_multipartycall;
+               case SuppServiceNotification.MT_CODE_ON_HOLD_CALL_RELEASED:
+                   //This message is displayed on B, when A makes call to B, puts it on hold & then releases it.
+                   return R.string.call_notif_callonhold_released;
+               case SuppServiceNotification.MT_CODE_FORWARD_CHECK_RECEIVED:
+                   //This message is displayed on C when the incoming call is forwarded from B
+                   return R.string.call_notif_forwardcheckreceived;
+               case SuppServiceNotification.MT_CODE_CALL_CONNECTING_ECT:
+                   //This message is displayed on B,when Call is connecting through Explicit Call Transfer
+                   return R.string.call_notif_callconnectingect;
+               case SuppServiceNotification.MT_CODE_CALL_CONNECTED_ECT:
+                   //This message is displayed on B,when Call is connected through Explicit Call Transfer
+                   return R.string.call_notif_callconnectedect;
+               case SuppServiceNotification.MT_CODE_ADDITIONAL_CALL_FORWARDED:
+                   // This message is displayed on B when it is busy and the incoming call gets forwarded to C
+                   return R.string.call_notif_MTcall_forwarding;
+            }
+        }
+
+        return -1;
     }
 
     /**

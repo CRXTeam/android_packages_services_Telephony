@@ -52,10 +52,9 @@ import java.util.Objects;
  * Service for making GSM and CDMA connections.
  */
 public class TelephonyConnectionService extends ConnectionService {
-    private final GsmConferenceController mGsmConferenceController =
-            new GsmConferenceController(this);
-    private final CdmaConferenceController mCdmaConferenceController =
-            new CdmaConferenceController(this);
+    private GsmConferenceController[] mGsmConferenceController;
+    private CdmaConferenceController[] mCdmaConferenceController;
+
     private ComponentName mExpectedComponentName = null;
     private EmergencyCallHelper mEmergencyCallHelper;
     private EmergencyTonePlayer mEmergencyTonePlayer;
@@ -64,6 +63,13 @@ public class TelephonyConnectionService extends ConnectionService {
     @Override
     public void onCreate() {
         super.onCreate();
+        int size = TelephonyManager.getDefault().getPhoneCount();
+        mGsmConferenceController  = new GsmConferenceController[size];
+        mCdmaConferenceController = new CdmaConferenceController[size];
+        for (int i = 0; i < size; i++) {
+            mGsmConferenceController[i] = new GsmConferenceController(this);
+            mCdmaConferenceController[i] = new CdmaConferenceController(this);
+        }
         mExpectedComponentName = new ComponentName(this, this.getClass());
         mEmergencyTonePlayer = new EmergencyTonePlayer(this);
     }
@@ -121,7 +127,7 @@ public class TelephonyConnectionService extends ConnectionService {
             }
 
             number = handle.getSchemeSpecificPart();
-            if (TextUtils.isEmpty(number)) {
+            if (!isSkipSchemaOrConfUri && TextUtils.isEmpty(number)) {
                 Log.d(this, "onCreateOutgoingConnection, unable to parse number");
                 return Connection.createFailedConnection(
                         DisconnectCauseUtil.toTelecomDisconnectCause(
@@ -173,7 +179,7 @@ public class TelephonyConnectionService extends ConnectionService {
         }
 
         final TelephonyConnection connection =
-                createConnectionFor(phone, null, true /* isOutgoing */);
+                createConnectionFor(phone, null, true /* isOutgoing */, null);
         if (connection == null) {
             return Connection.createFailedConnection(
                     DisconnectCauseUtil.toTelecomDisconnectCause(
@@ -246,8 +252,9 @@ public class TelephonyConnectionService extends ConnectionService {
             return Connection.createCanceledConnection();
         }
 
+        final Bundle extras = request.getExtras();
         Connection connection =
-                createConnectionFor(phone, originalConnection, false /* isOutgoing */);
+                createConnectionFor(phone, originalConnection, false /* isOutgoing */, extras);
         if (connection == null) {
             connection = Connection.createCanceledConnection();
             return Connection.createCanceledConnection();
@@ -297,7 +304,7 @@ public class TelephonyConnectionService extends ConnectionService {
 
         TelephonyConnection connection =
                 createConnectionFor(phone, unknownConnection,
-                        !unknownConnection.isIncoming() /* isOutgoing */);
+                        !unknownConnection.isIncoming() /* isOutgoing */, null);
 
         if (connection == null) {
             return Connection.createCanceledConnection();
@@ -373,17 +380,21 @@ public class TelephonyConnectionService extends ConnectionService {
     private TelephonyConnection createConnectionFor(
             Phone phone,
             com.android.internal.telephony.Connection originalConnection,
-            boolean isOutgoing) {
+            boolean isOutgoing,
+            Bundle extras) {
         int phoneType = phone.getPhoneType();
+        int phoneId = phone.getPhoneId();
         if (phoneType == TelephonyManager.PHONE_TYPE_GSM) {
-            GsmConnection connection = new GsmConnection(originalConnection);
-            mGsmConferenceController.add(connection);
+            boolean isForwarded = extras != null
+                    && extras.getBoolean(TelephonyManager.EXTRA_IS_FORWARDED, false);
+            GsmConnection connection = new GsmConnection(originalConnection, isForwarded);
+            mGsmConferenceController[phoneId].add(connection);
             return connection;
         } else if (phoneType == TelephonyManager.PHONE_TYPE_CDMA) {
             boolean allowMute = allowMute(phone);
             CdmaConnection connection = new CdmaConnection(
                     originalConnection, mEmergencyTonePlayer, allowMute, isOutgoing);
-            mCdmaConferenceController.add(connection);
+            mCdmaConferenceController[phoneId].add(connection);
             return connection;
         } else {
             return null;
